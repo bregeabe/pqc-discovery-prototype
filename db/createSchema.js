@@ -1,17 +1,14 @@
-#!/usr/bin/env node
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
 const dbPath = path.resolve("pqc.db");
 
-// delete old DB if exists
 if (fs.existsSync(dbPath)) {
   fs.rmSync(dbPath);
   console.log("Old database removed.");
 }
 
-// open sqlite db
 const db = new Database(dbPath);
 
 db.pragma("journal_mode = WAL");
