@@ -1,5 +1,5 @@
 import * as swc from "@swc/core";
-import { fs } from "fs";
+import * as fs from "fs";
 
 async function parseFileToAst(path) {
   const code = fs.readFileSync(path, "utf-8");

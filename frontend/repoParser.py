@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from backend.queries import insert_project
 
 TEMP_ROOT = Path(__file__).resolve().parent / "tmp"
 TEMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -26,17 +27,16 @@ def _validate_git_url(url: str):
     raise ValueError(f"Unsupported repo URL format: {url}")
 
 
-def _build_temp_path():
+def _build_temp_path(project_id: str):
     """
     Returns a unique new directory path under TEMP_ROOT.
     """
-    unique_id = uuid.uuid4().hex
-    path = TEMP_ROOT / unique_id
+    path = TEMP_ROOT / project_id
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def clone_repo(repo_url: str) -> Path:
+def clone_repo(repo_url: str) -> tuple[Path, str]:
     """
     Clones a public repository into a fresh UUID temp dir and returns its path.
 
@@ -47,7 +47,8 @@ def clone_repo(repo_url: str) -> Path:
         Path: location of the cloned repo
     """
     repo_url = _validate_git_url(repo_url)
-    working_dir = _build_temp_path()
+    project_id = insert_project(repo_url)
+    working_dir = _build_temp_path(project_id)
     repo_path = working_dir / "repo"
 
     try:
@@ -63,7 +64,7 @@ def clone_repo(repo_url: str) -> Path:
             shutil.rmtree(working_dir, ignore_errors=True)
             raise RepoCloneError(f"Git clone failed: {result.stderr}")
 
-        return repo_path
+        return (repo_path, project_id)
 
     except Exception as e:
         shutil.rmtree(working_dir, ignore_errors=True)
@@ -71,8 +72,5 @@ def clone_repo(repo_url: str) -> Path:
 
 
 def remove_repo_path(path: Path):
-    """
-    Removes the cloned repo directory.
-    """
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)

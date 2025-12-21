@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 import json
 import subprocess
-
+from backend.queries import insert_file, insert_ast
 
 KEEP_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 IGNORE_FOLDERS = {"node_modules", "dist"}
@@ -115,31 +115,32 @@ def delete_empty_dirs(path: Path, ignore_folders: set[str]):
                 print(f"Warning: Failed to remove empty directory {dir_path}: {e}")
 
 
-def trimmer(repo_path: str | Path) -> dict:
+def trimmer(repo_path: str | Path, project_id: str) -> dict:
     """
-    Reads all .js/.jsx/.ts/.tsx files in repo, runs them against crypto regex patterns,
-    and deletes any file that does *not* match at least one pattern.
+    Reads all .js/.jsx/.ts/.tsx files, matches against crypto regex patterns,
+    deletes non-matching files, and makes db record.
 
     Returns:
         {
-            "kept_crypto_files": { file_path: [categories...] },
+            "kept_crypto_files": { file_path: { "categories": [...], "fileId": <uuid> } },
             "removed_non_crypto_files": [...],
             "matches_by_category": { category: [file_paths...] }
         }
     """
     repo_path = Path(repo_path).resolve()
 
-    kept_by_file = {}          # file_path → [categories...]
-    removed_files = []         # simple list of deleted files
+    kept_by_file = {}          # file_path → { categories: [...], fileId: <uuid> }
+    removed_files = []         # list of deleted files
     matches_by_category = {}   # category → [file_paths...]
 
     for category in CRYPTO_PATTERNS.keys():
         matches_by_category[category] = []
 
-    compiled_patterns = []
-    for category, patterns in CRYPTO_PATTERNS.items():
-        for pattern in patterns:
-            compiled_patterns.append((category, re.compile(pattern, flags=re.IGNORECASE)))
+    compiled_patterns = [
+        (category, re.compile(pattern, flags=re.IGNORECASE))
+        for category, patterns in CRYPTO_PATTERNS.items()
+        for pattern in patterns
+    ]
 
     for root, _, files in os.walk(repo_path):
         root_path = Path(root)
@@ -158,20 +159,23 @@ def trimmer(repo_path: str | Path) -> dict:
             except Exception:
                 continue
 
-            matched_categories = []
-
-            for category, regex in compiled_patterns:
-                if regex.search(content):
-                    matched_categories.append(category)
+            matched_categories = [
+                category for category, regex in compiled_patterns if regex.search(content)
+            ]
 
             if matched_categories:
-                kept_by_file[str(file_path)] = matched_categories
+                # Insert file record in SQLite
+                file_id = insert_file(project_id, str(file_path))
+
+                kept_by_file[str(file_path)] = {
+                    "categories": matched_categories,
+                    "fileId": file_id,
+                }
 
                 for category in matched_categories:
                     matches_by_category[category].append(str(file_path))
 
             else:
-                # File removed — no crypto usage
                 try:
                     file_path.unlink()
                     removed_files.append(str(file_path))
@@ -186,63 +190,67 @@ def trimmer(repo_path: str | Path) -> dict:
         "matches_by_category": matches_by_category,
     }
 
-def attach_asts_to_results(results_json_path: str | Path) -> dict:
+def attach_asts_to_results(results_json_path: str | Path, kept_crypto_files: dict) -> dict:
     """
-    Given a JSON file whose top-level structure is:
-        {
-            "aes": ["/path/file1.ts", ...],
-            "rsa": [...],
-            ...
-        }
+    Converts crypto file paths into ASTs and makes db record.
 
-    This function:
-      - Finds all unique file paths across all categories,
-      - Runs astParser.js on each file to get an SWC AST,
-      - Adds an "asts" field mapping file_path -> AST result,
-      - Writes a new JSON file alongside the original:
-            <original_stem>_with_ast.json
+    kept_crypto_files format example:
+    {
+        "/path/to/file.ts": {
+            "categories": ["aes", "rsa"],
+            "fileId": "uuid4"
+        }
+    }
 
     Returns:
         {
-            "output_path": <path to new json>,
-            "files_annotated": <count of files processed>
+            "files_annotated": <int>,
+            "failures": <list>
         }
     """
     results_path = Path(results_json_path).resolve()
-    results = json.loads(results_path.read_text())
 
-    updated_results = dict(results)
-    updated_results["asts"] = {}
+    results = json.loads(results_path.read_text())
 
     file_paths: set[str] = set()
     for category, files in results.items():
-        if not isinstance(files, list):
-            continue
-        for fp in files:
-            file_paths.add(fp)
+        if isinstance(files, list):
+            for fp in files:
+                file_paths.add(fp)
 
     script = Path(__file__).resolve().parent / "jsParser.js"
 
+    failures = []
+    inserted_count = 0
+
     for file_path in file_paths:
+        if file_path not in kept_crypto_files:
+            failures.append({
+                "file_path": file_path,
+                "error": "No fileId entry found"
+            })
+            continue
+
+        fileId = kept_crypto_files[file_path]["fileId"]
+
         try:
             output = subprocess.check_output(
                 ["node", str(script), file_path],
                 text=True
             )
-            parsed = json.loads(output)
-            updated_results["asts"][file_path] = parsed
+            ast_json = json.loads(output)
+
+            insert_ast(fileId, json.dumps(ast_json))
+
+            inserted_count += 1
 
         except Exception as e:
-            updated_results["asts"][file_path] = {
-                "ok": False,
-                "error": str(e),
-            }
-
-    new_path = results_path.with_name(results_path.stem + "_with_ast.json")
-    print(updated_results)
-    new_path.write_text(json.dumps(updated_results, indent=4))
+            failures.append({
+                "file_path": file_path,
+                "error": str(e)
+            })
 
     return {
-        "output_path": str(new_path),
-        "files_annotated": len(file_paths),
+        "files_annotated": inserted_count,
+        "failures": failures,
     }
