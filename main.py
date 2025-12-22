@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from frontend.repoParser import clone_repo, remove_repo_path
 from frontend.usageScanner import scan_and_filter_repo, trimmer, attach_asts_to_results
+from frontend.utils import generate_cbom_from_ast, read_json_file
 from backend.queries import clear_database
 
 TEMP_ROOT = Path(__file__).resolve().parent / "results"
@@ -41,6 +42,29 @@ if __name__ == "__main__":
             print("Pruning complete:", pruned)
         except subprocess.CalledProcessError as e:
             print("Pruning failed:", e.stdout, e.stderr)
+
+        print ("Generating CBOMs...")
+        fileJson = read_json_file(f"{TEMP_ROOT}/pruned_project_asts.json")
+        if fileJson is None:
+            raise ValueError("Failed to read pruned AST JSON file.")
+
+        astJsonList = fileJson["files"]
+        flat = [item for sub in astJsonList for item in sub]
+        res = []
+        for item in flat:
+            if not isinstance(item, str):
+                print("Skipping non-string AST item:", item)
+                continue
+            if isinstance(item, str):
+                cbom = generate_cbom_from_ast(
+                    ast_json_str=item,
+                    model="gpt-4.1-mini"
+                )
+                print("Generated CBOM:", cbom)
+                res.append(cbom)
+        print("CBOM generation complete:", res)
+        with open(f"{TEMP_ROOT}/cbom_output.json", "w") as f:
+            json.dump(res, f, indent=4)
 
     except Exception as err:
         print("Error in main:", err)
