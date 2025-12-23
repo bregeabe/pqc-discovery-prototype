@@ -72,7 +72,6 @@ def scan_filesystem(
         if dir_meta:
             results.append(dir_meta)
 
-        # File metadata
         for name in filenames:
             file_path = dirpath / name
             meta = file_metadata(file_path)
