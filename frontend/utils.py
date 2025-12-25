@@ -12,7 +12,7 @@ import time
 from dotenv import load_dotenv
 import os
 from backend.queries import clear_database
-from frontend.usageScanner import scan_and_filter_repo, trimmer, attach_asts_to_results
+from frontend.usageScanner import scan_and_filter_repo, trimmer, attach_asts_to_results, resolve_imports_for_repo
 from frontend.repoParser import clone_repo, remove_repo_path
 import subprocess
 
@@ -199,8 +199,12 @@ def parse_github_repo(github_url: str, out_path: str ) -> tuple[Dict[Any, Any], 
         print("Repo cloned at:", repo_path)
         result = scan_and_filter_repo(repo_path)
         print("Kept files after initial scan:", len(result["kept"]))
-        print("Deleted files after initial scan:", len(result["deleted"]))
+        print("Deleted files after initial scan:", result["deleted"])
 
+        print("Resolving imports...")
+        resolve_imports_for_repo(repo_path)
+
+        print("Trimming non-crypto files...")
         trimRes = trimmer(repo_path, project_id)
         print("Kept files after trimming:", len(trimRes["kept_crypto_files"]))
         print("Deleted files after trimming:", len(trimRes["removed_non_crypto_files"]))
@@ -265,7 +269,7 @@ def generate_cboms_from_matches(MATCHES_FILE: Path = TEMP_ROOT / "matches.json",
         source = read_source_file(path)
         if not source:
             continue
-
+        # print(source[:100000])
         try:
             cbom = generate_cbom_from_ast(
                 ast_json_str=source,
