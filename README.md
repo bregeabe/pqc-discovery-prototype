@@ -4,3 +4,13 @@ Modeled After [Cryptoscope](https://research.ibm.com/publications/cryptoscope-an
 
 ## Diagram
 ![Relational Diagram](assets/pqc-inventory.png)
+
+## Future Improvements
+- Extend langauge support (Python, C++, Java)
+- Network Analyzer
+- Filesystem Analyzer
+- AST vs source file toggle
+- Tests
+- Error handling
+- Expand regex's
+- Start support for specific libraries

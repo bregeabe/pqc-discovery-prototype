@@ -209,3 +209,8 @@ __marimo__/
 tmp/
 node_modules/
 pqc.*
+results/
+*.out
+foo.*
+blog.md
+*.bkp
