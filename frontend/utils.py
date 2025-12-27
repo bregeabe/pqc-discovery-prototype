@@ -15,6 +15,7 @@ from backend.queries import clear_database
 from frontend.usageScanner import scan_and_filter_repo, trimmer, attach_asts_to_results, resolve_imports_for_repo
 from frontend.repoParser import clone_repo, remove_repo_path
 import subprocess
+import re
 
 load_dotenv()
 
@@ -112,7 +113,6 @@ def run_openai_query(
 def generate_cbom_from_ast(
     ast_json_str: str,
     model: str = DEFAULT_MODEL,
-    MAX_CHARS: int = 120_000,
 ) -> Optional[Any]:
     BASE_PROMPT = """
     You will receive an AST in JSON format representing source code files with some type of cryptographic use.
@@ -134,7 +134,7 @@ def generate_cbom_from_ast(
     If this is the case, simply pick the first one and set the flag "multiple_uses": true in the output.
     Here is a short description of each field:
     - file_name: The name of the source code file where the cryptographic element is located.
-    - line_number: The line number in the source code file where the cryptographic element is found.
+    - line_number: The line number in the source code file where the API call is made.
     - api_call: The specific API call or function used for the cryptographic operation (e.g. hashSync(data, salt), encrypt(data, key)).
     - algorithm: The cryptography algorithm being used (e.g., AES, 3DES, SHA-256, etc.)
     - cryptographic_function: The type of cryptographic function being performed (e.g. keygen, digest, verify)
@@ -144,11 +144,6 @@ def generate_cbom_from_ast(
     - multiple_uses: A boolean flag indicating whether multiple cryptographic uses were detected in the AST.
     Only provide the CBOM in json format.
     """
-
-    if len(ast_json_str) > MAX_CHARS:
-        print("AST too large, slicing:", len(ast_json_str))
-        ast_json_str = ast_json_str[:MAX_CHARS]
-        return {}
 
     prompt = BASE_PROMPT + ast_json_str
 
@@ -165,9 +160,10 @@ def generate_cbom_from_ast(
                 print(f"Rate limit hit, retrying in {wait}s...")
                 time.sleep(wait)
             else:
-                raise e
+                return {"error": str(e)}
 
-    raise RuntimeError("Max retries exceeded")
+    # raise RuntimeError("Max retries exceeded")
+    print("skipping after max retries")
 
 def read_json_file(file_path: str) -> Optional[Any]:
     """
@@ -272,7 +268,7 @@ def generate_cboms_from_matches(MATCHES_FILE: Path = TEMP_ROOT / "matches.json",
         # print(source[:100000])
         try:
             cbom = generate_cbom_from_ast(
-                ast_json_str=source,
+                ast_json_str=f"FILENAME: {path}\n SOURCE: {source}",
                 model="gpt-4.1",
             )
         except Exception as e:
@@ -299,11 +295,32 @@ def generate_cboms_from_ast_files(out_ast_path: Path = TEMP_ROOT / "pruned_proje
     astJsonList = fileJson["files"]
     flat = ["".join(sub) for sub in astJsonList]
     res = []
+    PATH_RE = re.compile(r"(/Users/abrahambrege/.*?\.js)")
     for item in flat:
         if not isinstance(item, str):
             print("Skipping non-string AST item:", item)
             continue
         if isinstance(item, str):
+            if len(item) > 120000:
+                print("AST too large, using source code only...")
+                if not PATH_RE.search(item):
+                    print("Could not extract file path from AST, skipping...")
+                    continue
+                path_match = PATH_RE.search(item)
+                if path_match is None:
+                    print("Could not extract file path from AST, skipping...")
+                    continue
+                ast_json_str = read_source_file(Path(path_match.group(1)))
+                if ast_json_str is None:
+                    print("Could not read source file, skipping...")
+                    continue
+                cbom = generate_cbom_from_ast(
+                    ast_json_str=ast_json_str,
+                    model="gpt-4.1"
+                )
+                print("Generated CBOM from source file:", cbom)
+                res.append(cbom)
+                continue
             cbom = generate_cbom_from_ast(
                 ast_json_str=item,
                 model="gpt-4.1"
@@ -313,3 +330,16 @@ def generate_cboms_from_ast_files(out_ast_path: Path = TEMP_ROOT / "pruned_proje
     print("CBOM generation complete:", res)
     with open(f"{TEMP_ROOT}/cbom_output.json", "w") as f:
         json.dump(res, f, indent=4)
+
+def remove_empty_entries(source_file_path: Path, output_file_path: Path):
+    data = read_json_file(str(source_file_path))
+    if data is None:
+        raise ValueError("Failed to read source JSON file.")
+
+    for entry in data:
+        cbom = entry.get("cbom", {})
+        if isinstance(cbom, dict):
+            entry["cbom"] = {k: v for k, v in cbom.items() if v not in (None, "", [], {})}
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"Filtered entries written to {output_file_path}, total: {len(data)}")

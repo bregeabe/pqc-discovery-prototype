@@ -16,11 +16,12 @@ def clean_output_string(raw: str) -> str:
     return raw
 
 
-def extract_cbom_objects(data: list) -> list:
+def extract_cbom_objects(data: list, from_matches: bool = False) -> list:
     results = []
 
     for entry in data:
-        entry = entry.get("cbom")
+        if (from_matches):
+            entry = entry.get("cbom")
         output_text = entry.get("output", "").strip()
         if not output_text:
             continue
@@ -36,14 +37,13 @@ def extract_cbom_objects(data: list) -> list:
 
     return results
 
+def convert_cbom_output_to_iso(from_matches: bool = False, input_path: Path = INPUT_PATH, output_path: Path = OUTPUT_PATH):
+    raw_data = json.loads(input_path.read_text())
 
-if __name__ == "__main__":
-    raw_data = json.loads(Path(INPUT_PATH).read_text())
+    cbom_objects = extract_cbom_objects(raw_data, from_matches=from_matches)
 
-    cbom_objects = extract_cbom_objects(raw_data)
-
-    Path(OUTPUT_PATH).write_text(
+    output_path.write_text(
         json.dumps(cbom_objects, indent=4)
     )
 
-    print(f"Extracted {len(cbom_objects)} CBOM objects → {OUTPUT_PATH}")
+    print(f"Extracted {len(cbom_objects)} CBOM objects → {output_path}")
